@@ -585,6 +585,9 @@ class CemianVideoThread(QThread):
     count_left_to_right_signal = Signal(int)  # 从左往右计数信号
     count_line1_signal = Signal(int)  # 第一条线计数信号
     count_line2_signal = Signal(int)  # 第二条线计数信号
+    count_line3_signal = Signal(int)  # 第三条线计数信号
+    count_line4_signal = Signal(int)  # 第四条线计数信号
+    count_line5_signal = Signal(int)  # 第五条线计数信号
     saved_image_signal = Signal(str)  # 用于发送保存的图片路径信号
     fps_signal = Signal(float)
 
@@ -601,6 +604,9 @@ class CemianVideoThread(QThread):
         self.current_video = None
         self.crop_box = (500, 300, 1800, 750)  # 添加裁切区域
         self.crop_box_second = (900, 300, 2200, 750)  # 第二条线的裁切区域（向右平移400像素）
+        self.crop_box_third = (1300, 300, 2600, 750)  # 第三条线的裁切区域（继续向右平移400像素）
+        self.crop_box_fourth = (700, 300, 2000, 750)  # 第四条线的裁切区域（左-中间之间）
+        self.crop_box_fifth = (1100, 300, 2400, 750)  # 第五条线的裁切区域（中-右之间）
 
     def set_model_path(self, model_path):
         try:
@@ -708,6 +714,9 @@ class CemianVideoThread(QThread):
             prev_x = None
             last_cross_time_line1 = 0
             last_cross_time_line2 = 0
+            last_cross_time_line3 = 0
+            last_cross_time_line4 = 0
+            last_cross_time_line5 = 0
             count_right_to_left = 0
             count_left_to_right = 0
             frame_save_count = 0  # 添加帧保存计数器
@@ -731,8 +740,14 @@ class CemianVideoThread(QThread):
 
                 # 获取帧的宽度以确定边界
                 frame_width = frame.shape[1]
-                center_line1 = 800  # 第一条中心线位置
-                center_line2 = 1200  # 第二条中心线位置
+                center_line1 = 800  # 左侧检测线位置
+                center_line2 = 1200  # 中间检测线位置
+                # 以中间线为对称轴，在右侧新增一根检测线
+                delta = center_line2 - center_line1
+                center_line3 = center_line2 + delta  # 右侧检测线位置
+                # 在左-中、 中-右 之间各增加一根辅助检测线
+                center_line4 = (center_line1 + center_line2) // 2  # 左-中之间
+                center_line5 = (center_line2 + center_line3) // 2  # 中-右之间
                 edge_margin = 100  # 边缘区域宽度
 
                 results = self.model(frame, conf=self.conf_threshold)
@@ -740,6 +755,9 @@ class CemianVideoThread(QThread):
                 annotated_frame = results[0].plot().copy()
                 crossed_line1 = False
                 crossed_line2 = False
+                crossed_line3 = False
+                crossed_line4 = False
+                crossed_line5 = False
 
                 if len(boxes) > 0:
                     x, y, w, h = boxes[0]
@@ -803,6 +821,73 @@ class CemianVideoThread(QThread):
                                 self.count_left_to_right_signal.emit(count_left_to_right)
                                 self.count_line2_signal.emit(count_right_to_left + count_left_to_right)
 
+                        # 检测穿越第三条线
+                        time_diff_line3 = current_time - last_cross_time_line3
+                        if time_diff_line3 > 0.5:  # 防止重复计数
+                            # 只关注前一帧和当前帧位置与第三条中心线的关系
+                            prev_at_right_line3 = prev_x > center_line3
+                            curr_at_left_line3 = center_x < center_line3
+                            prev_at_left_line3 = prev_x < center_line3
+                            curr_at_right_line3 = center_x > center_line3
+
+                            # 确保框真实穿越了第三条检测线（从右往左）
+                            if prev_at_right_line3 and curr_at_left_line3:
+                                count_right_to_left += 1
+                                last_cross_time_line3 = current_time
+                                crossed_line3 = True
+                                self.count_right_to_left_signal.emit(count_right_to_left)
+                                self.count_line3_signal.emit(count_right_to_left + count_left_to_right)
+
+                            # 确保框真实穿越了第三条检测线（从左往右）
+                            elif prev_at_left_line3 and curr_at_right_line3:
+                                count_left_to_right += 1
+                                last_cross_time_line3 = current_time
+                                crossed_line3 = True
+                                self.count_left_to_right_signal.emit(count_left_to_right)
+                                self.count_line3_signal.emit(count_right_to_left + count_left_to_right)
+
+                        # 检测穿越第四条线（左-中之间）
+                        time_diff_line4 = current_time - last_cross_time_line4
+                        if time_diff_line4 > 0.5:  # 防止重复计数
+                            prev_at_right_line4 = prev_x > center_line4
+                            curr_at_left_line4 = center_x < center_line4
+                            prev_at_left_line4 = prev_x < center_line4
+                            curr_at_right_line4 = center_x > center_line4
+
+                            if prev_at_right_line4 and curr_at_left_line4:
+                                count_right_to_left += 1
+                                last_cross_time_line4 = current_time
+                                crossed_line4 = True
+                                self.count_right_to_left_signal.emit(count_right_to_left)
+                                self.count_line4_signal.emit(count_right_to_left + count_left_to_right)
+                            elif prev_at_left_line4 and curr_at_right_line4:
+                                count_left_to_right += 1
+                                last_cross_time_line4 = current_time
+                                crossed_line4 = True
+                                self.count_left_to_right_signal.emit(count_left_to_right)
+                                self.count_line4_signal.emit(count_right_to_left + count_left_to_right)
+
+                        # 检测穿越第五条线（中-右之间）
+                        time_diff_line5 = current_time - last_cross_time_line5
+                        if time_diff_line5 > 0.5:  # 防止重复计数
+                            prev_at_right_line5 = prev_x > center_line5
+                            curr_at_left_line5 = center_x < center_line5
+                            prev_at_left_line5 = prev_x < center_line5
+                            curr_at_right_line5 = center_x > center_line5
+
+                            if prev_at_right_line5 and curr_at_left_line5:
+                                count_right_to_left += 1
+                                last_cross_time_line5 = current_time
+                                crossed_line5 = True
+                                self.count_right_to_left_signal.emit(count_right_to_left)
+                                self.count_line5_signal.emit(count_right_to_left + count_left_to_right)
+                            elif prev_at_left_line5 and curr_at_right_line5:
+                                count_left_to_right += 1
+                                last_cross_time_line5 = current_time
+                                crossed_line5 = True
+                                self.count_left_to_right_signal.emit(count_left_to_right)
+                                self.count_line5_signal.emit(count_right_to_left + count_left_to_right)
+
                     prev_x = center_x
 
                 # 处理穿越第一条线的照片保存
@@ -845,17 +930,54 @@ class CemianVideoThread(QThread):
                     except Exception as e:
                         print(f"裁切第二条线图片失败: {str(e)}")
 
-                # 在帧上绘制两条中心线
-                cv2.line(annotated_frame, (center_line1, 0), (center_line1, annotated_frame.shape[0]), (0, 255, 0), 2)
-                cv2.line(annotated_frame, (center_line2, 0), (center_line2, annotated_frame.shape[0]), (0, 255, 0), 2)
-                
-                # 添加线条标签
-                cv2.putText(annotated_frame, "Line 1", (center_line1 + 10, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-                cv2.putText(annotated_frame, "Line 2", (center_line2 + 10, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                # 处理穿越第三条线的照片保存
+                if crossed_line3:
+                    frame_save_count += 1
+                    # 裁切图片（第三条线）
+                    try:
+                        # 将OpenCV图像转换为PIL图像
+                        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                        pil_image = Image.fromarray(frame_rgb)
+                        # 裁切图片（第三条线）
+                        cropped = pil_image.crop(self.crop_box_third)
+                        # 保存裁切后的图片
+                        cropped_save_path = os.path.join(video_save_dir, f"{frame_save_count}_line3.jpg")
+                        cropped.save(cropped_save_path)
+                        # 发送裁切后的图片路径信号
+                        self.saved_image_signal.emit(cropped_save_path)
+                        # 对裁切后的图片进行车牌识别
+                        self.process_plate_recognition(cropped_save_path)
+                    except Exception as e:
+                        print(f"裁切第三条线图片失败: {str(e)}")
 
-                # 显示计数
-                cv2.putText(annotated_frame, f"R→L: {count_right_to_left}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
-                            (0, 0, 255), 2)
+                # 处理穿越第四条线的照片保存
+                if crossed_line4:
+                    frame_save_count += 1
+                    try:
+                        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                        pil_image = Image.fromarray(frame_rgb)
+                        cropped = pil_image.crop(self.crop_box_fourth)
+                        cropped_save_path = os.path.join(video_save_dir, f"{frame_save_count}_line4.jpg")
+                        cropped.save(cropped_save_path)
+                        self.saved_image_signal.emit(cropped_save_path)
+                        self.process_plate_recognition(cropped_save_path)
+                    except Exception as e:
+                        print(f"裁切第四条线图片失败: {str(e)}")
+
+                # 处理穿越第五条线的照片保存
+                if crossed_line5:
+                    frame_save_count += 1
+                    try:
+                        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                        pil_image = Image.fromarray(frame_rgb)
+                        cropped = pil_image.crop(self.crop_box_fifth)
+                        cropped_save_path = os.path.join(video_save_dir, f"{frame_save_count}_line5.jpg")
+                        cropped.save(cropped_save_path)
+                        self.saved_image_signal.emit(cropped_save_path)
+                        self.process_plate_recognition(cropped_save_path)
+                    except Exception as e:
+                        print(f"裁切第五条线图片失败: {str(e)}")
+
                 cv2.putText(annotated_frame, f"L→R: {count_left_to_right}", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
                             (255, 0, 0), 2)
 
