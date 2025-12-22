@@ -1,3 +1,6 @@
 已处理文件记录.txt
 *.exe
 /build
+data/rate.csv
+*.csv
+data/rate.csv
