@@ -282,3 +282,6 @@ python guanggang_main.py
 - 使用日志框架（如 `logging`）替代 `print`，统一管理日志级别与输出；
 - 为核心检测 / 积水识别 / 数据库接口编写单元测试，便于维护与回归；
 - 在前端增加运行状态面板（线程状态、队列长度、数据库连接状态等），提升运维可 observability。
+
+![alt text](image.png)
+![alt text](image-1.png)
