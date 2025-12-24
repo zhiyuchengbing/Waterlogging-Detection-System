@@ -1,0 +1,1040 @@
+# 广钢积水检测系统 v5.0 技术文档
+
+## 一、项目概述
+
+### 1.1 项目简介
+
+广钢积水检测系统是一个基于深度学习的智能视频分析和积水检测系统，主要用于厂区列车经过时的积水风险自动检测与预警。系统通过视频智能识别技术，实现对列车车厢的自动检测、计数、积水识别，并将处理结果自动保存与可视化，同时支持与后台数据库联动进行积水车厢审核、状态更新与统计分析。
+
+**系统版本**: v5.0  
+**开发语言**: Python 3.8+  
+**主要框架**: PySide6 (Qt6)  
+**深度学习框架**: Ultralytics YOLO  
+**数据库**: MySQL
+
+### 1.2 核心功能
+
+1. **主系统视频检测**：自动从视频中识别通过画面的列车/车厢目标，进行计数并裁剪保存
+2. **侧面检测系统**：面向列车侧面视角的检测和计数，支持车牌识别
+3. **积水识别系统**：对检测结果图像进行积水区域识别和标记
+4. **数据库管理**：自动将检测结果同步到MySQL数据库，支持审核和查询
+5. **自动视频扫描**：无人值守地持续扫描新视频并自动处理
+6. **结果可视化**：提供列车信息查看、积水车厢查看、准确率统计等功能
+
+### 1.3 系统架构
+
+系统采用模块化设计，主要分为以下几个层次：
+
+```
+┌─────────────────────────────────────────┐
+│            GUI 用户界面层                │
+│        (PySide6 MainWindow)             │
+└─────────────────────────────────────────┘
+                    ↓
+┌─────────────────────────────────────────┐
+│         业务逻辑处理层                   │
+│  - VideoThread (主系统处理)             │
+│  - CemianVideoThread (侧面系统)         │
+│  - AutoProcessor (自动扫描)             │
+│  - WaterDetectionMonitor (积水识别)     │
+└─────────────────────────────────────────┘
+                    ↓
+┌─────────────────────────────────────────┐
+│         深度学习模型层                   │
+│  - YOLO 目标检测模型                    │
+│  - YOLO 图像分割模型                    │
+│  - 车牌识别模型                         │
+└─────────────────────────────────────────┘
+                    ↓
+┌─────────────────────────────────────────┐
+│         数据存储层                       │
+│  - 文件系统 (CSV, 图片)                 │
+│  - MySQL 数据库                         │
+└─────────────────────────────────────────┘
+```
+
+## 二、技术架构详解
+
+### 2.1 核心技术栈
+
+#### 2.1.1 GUI框架
+- **PySide6**: Qt6的Python绑定，用于构建桌面应用程序
+  - 版本要求: Qt6兼容版本
+  - 主要用途: 主窗口、对话框、表格、图像显示等UI组件
+  - 多线程支持: QThread用于后台视频处理
+
+#### 2.1.2 深度学习框架
+- **Ultralytics YOLO**: 目标检测和图像分割
+  - 主要模型:
+    - 车厢检测模型: `SEGMENT_TRAIN2_WEIGHTS` (分割模型)
+    - 积水识别模型: `WATER_SEGMENT_WEIGHTS` (分割模型)
+    - 主系统检测模型: `DETECT_TRAIN5_WEIGHTS` (检测模型)
+    - 车牌识别模型: `DETECT_TRAIN2_PLATE_WEIGHTS` (检测模型)
+  - 模型格式: PyTorch (.pt)
+  - 延迟加载: 使用LazyLoader延迟加载YOLO类，加快启动速度
+
+#### 2.1.3 图像处理
+- **OpenCV (cv2)**: 视频解码、图像处理、绘制和保存
+  - 视频格式支持: MP4, AVI等
+  - 图像操作: 裁剪、缩放、绘制边界框、掩码处理
+- **NumPy**: 数值计算和数组操作
+- **Pillow (PIL)**: 图像读写和处理（延迟导入）
+
+#### 2.1.4 数据处理
+- **Pandas**: CSV文件读写、数据清洗和统计分析
+- **CSV**: 标准库，用于CSV文件处理
+
+#### 2.1.5 数据库
+- **PyMySQL**: MySQL数据库连接和操作
+- **YAML**: 配置文件解析（数据库配置）
+
+#### 2.1.6 文件监控
+- **Watchdog**: 文件系统监控，检测新文件创建和修改事件
+
+#### 2.1.7 可视化
+- **Matplotlib**: 图表和曲线绘制
+- **Seaborn**: 统计数据可视化（可选）
+
+### 2.2 项目目录结构
+
+```
+Waterlogging-Detection-System/
+├── guanggang_main.py              # 主程序入口，包含所有核心类
+├── inference2.py                  # 积水识别模块
+├── database_auto_updater.py       # 数据库自动更新器
+├── test_mysql.py                  # MySQL数据库操作模块
+├── train_info_viewer.py           # 列车信息查看器
+├── accuracy_visualization.py      # 准确率可视化（可选）
+├── export_water_originals.py      # 积水原始数据导出
+├── config/
+│   └── settings.yaml              # 数据库配置文件
+├── data/
+│   ├── dropdata.csv               # 数据文件
+│   └── rate.csv                   # 准确率统计文件
+├── runs/
+│   └── output_images/             # 输出图片目录
+│       └── {train_name}/          # 按列车名组织的子目录
+│           ├── frame_X.jpg        # 检测到的车厢图片
+│           ├── {train_name}_积水识别结果.csv
+│           └── 积水识别结果/       # 积水识别结果图片
+├── output_images/                 # 侧面检测输出目录
+│   └── {train_name}/
+│       ├── plate_results.csv      # 车牌识别结果
+│       └── *.jpg                  # 侧面检测图片
+├── water_detection_status/        # 积水检测状态目录
+├── build/                         # PyInstaller构建输出
+├── dist/                          # 打包后的可执行文件
+├── WaterloggingApp.spec           # PyInstaller配置文件
+└── 已处理文件记录.txt              # 已处理文件记录
+```
+
+### 2.3 关键路径配置
+
+系统使用绝对路径配置，主要路径常量定义在 `guanggang_main.py` 文件顶部：
+
+```python
+# 输出目录
+OUTPUT_IMAGES_DIR = r"E:\积水识别项目\demo0625\demo\output_images"
+RUNS_OUTPUT_IMAGES_DIR = r"E:\积水识别项目\demo0625\demo\runs\output_images"
+
+# 数据目录
+DATA_DIR = r"E:\积水识别项目\demo0625\demo\data"
+WATER_STATUS_DIR = r"E:\积水识别项目\demo0625\demo\water_detection_status"
+PROCESSED_FILES_PATH = r"E:\积水识别项目\demo0625\demo\已处理文件记录.txt"
+
+# 模型权重路径
+SEGMENT_TRAIN2_WEIGHTS = r"E:\积水识别项目\demo0625\demo\runs\segment\train2\weights\best.pt"
+WATER_SEGMENT_WEIGHTS = r"E:\积水识别项目\demo0625\demo\runs\segment\train\weights_jishui\best4.pt"
+DETECT_TRAIN5_WEIGHTS = r"E:\积水识别项目\demo0625\demo\runs\detect\train5\weights\best.pt"
+DETECT_TRAIN2_PLATE_WEIGHTS = r"E:\积水识别项目\demo0625\demo\runs\detect\train2\weights\best3_0816.pt"
+
+# 默认视频目录
+DEFAULT_VIDEO_DIR = r"E:\积水识别项目\视频下载模块\record"
+```
+
+**注意**: 实际部署时需要根据实际情况修改这些路径。
+
+## 三、核心模块详解
+
+### 3.1 主窗口模块 (MainWindow)
+
+**文件位置**: `guanggang_main.py`  
+**类名**: `MainWindow(QMainWindow)`
+
+主窗口是系统的核心UI组件，集成了所有功能模块的入口和控制界面。
+
+#### 3.1.1 主要功能
+
+1. **主系统视频检测控制**
+   - 视频选择和处理启动/停止
+   - 实时视频显示和检测结果展示
+   - 计数统计显示（FPS、检测数量）
+
+2. **侧面检测系统控制**
+   - 侧面视频自动处理启动/停止
+   - 多方向计数显示（左到右、右到左、多条检测线）
+   - 车牌识别结果展示
+
+3. **自动处理管理**
+   - 自动文件夹选择
+   - 自动视频扫描和处理任务管理
+   - 处理状态显示
+
+4. **功能模块入口**
+   - 列车信息查看
+   - 积水识别系统
+   - 积水车厢查看
+   - 准确率可视化
+
+#### 3.1.2 关键方法
+
+```python
+def __init__(self):
+    """初始化主窗口，设置UI布局和信号连接"""
+    
+def center_window(self):
+    """窗口居中显示"""
+    
+def start_auto_processing(self):
+    """启动自动视频处理"""
+    
+def stop_auto_processing(self):
+    """停止自动视频处理"""
+    
+def update_image(self, cv_img):
+    """更新主系统视频显示"""
+    
+def update_cemian_image(self, cv_img):
+    """更新侧面检测视频显示"""
+    
+def open_train_info(self):
+    """打开列车信息查看窗口"""
+    
+def open_water_detection(self):
+    """打开积水识别系统"""
+    
+def open_water_carriage_viewer(self):
+    """打开积水车厢查看窗口"""
+```
+
+### 3.2 主系统视频处理线程 (VideoThread)
+
+**文件位置**: `guanggang_main.py`  
+**类名**: `VideoThread(QThread)`
+
+负责主系统视频的检测、跟踪和计数处理。
+
+#### 3.2.1 功能特点
+
+- 基于YOLO模型进行目标检测和跟踪
+- 支持自定义置信度阈值
+- 检测区域限制（可选）
+- 自动裁剪检测到的目标区域并保存
+- 实时发送帧图像、计数和FPS信息到UI
+
+#### 3.2.2 核心处理流程
+
+1. **视频加载**: 使用OpenCV读取视频文件
+2. **模型初始化**: 延迟加载YOLO模型
+3. **帧处理循环**:
+   - 读取视频帧
+   - YOLO模型检测和跟踪 (`model.track()`)
+   - 过滤检测结果（置信度阈值、检测区域）
+   - 计数逻辑处理（避免重复计数）
+   - 裁剪目标区域并保存为独立图片
+   - 绘制检测框和计数线
+   - 发送信号更新UI
+
+#### 3.2.3 关键信号
+
+```python
+change_pixmap_signal = Signal(np.ndarray)      # 发送视频帧
+count_signal = Signal(int)                      # 发送计数
+saved_image_signal = Signal(str)                # 发送保存的图片路径
+fps_signal = Signal(float)                      # 发送帧率
+video_finished_signal = Signal(str)             # 视频处理完成
+```
+
+#### 3.2.4 输出结果
+
+- 检测图片保存路径: `{save_path}/{video_parent_folder}/frame_{frame_number}.jpg`
+- 处理完成标记: `{save_path}/{video_parent_folder}/processed_complete.txt`
+
+### 3.3 侧面检测系统线程 (CemianVideoThread)
+
+**文件位置**: `guanggang_main.py`  
+**类名**: `CemianVideoThread(QThread)`
+
+负责列车侧面视频的检测、计数和车牌识别。
+
+#### 3.3.1 功能特点
+
+- 支持多条检测线的独立计数
+- 支持双向计数（从左到右、从右到左）
+- 集成车牌识别模型
+- 输出车牌识别结果CSV文件
+- 支持自动处理模式（扫描文件夹自动处理）
+
+#### 3.3.2 处理流程
+
+1. 视频加载和模型初始化（检测模型 + 车牌识别模型）
+2. 帧循环处理:
+   - 目标检测
+   - 多方向跟踪和计数
+   - 多条检测线判断
+   - 车牌识别（可选）
+3. 结果保存:
+   - 检测帧图片
+   - `plate_results.csv` (包含车牌号、时间戳、图片路径)
+
+#### 3.3.3 关键信号
+
+```python
+change_pixmap_signal = Signal(np.ndarray)
+count_signal = Signal(int)
+count_right_to_left_signal = Signal(int)
+count_left_to_right_signal = Signal(int)
+count_line1_signal = Signal(int)
+count_line2_signal = Signal(int)
+count_line3_signal = Signal(int)
+count_line4_signal = Signal(int)
+count_line5_signal = Signal(int)
+saved_image_signal = Signal(str)
+fps_signal = Signal(float)
+```
+
+### 3.4 自动视频扫描处理器 (AutoProcessor)
+
+**文件位置**: `guanggang_main.py`  
+**类名**: `AutoProcessor(QThread)`
+
+自动扫描指定文件夹，查找未处理的视频并自动处理。
+
+#### 3.4.1 功能特点
+
+- 周期性扫描文件夹（默认30秒间隔）
+- 智能判断视频是否已处理
+- 仅处理最近一周内的新视频（避免重复处理历史数据）
+- 自动调用VideoThread处理新视频
+- 处理状态实时更新
+
+#### 3.4.2 视频识别规则
+
+- 主系统视频: 文件名以 `36` 开头的 `.mp4` 文件
+- 侧面系统视频: 文件名以 `33` 开头的 `.mp4` 或 `.avi` 文件
+
+#### 3.4.3 处理判断逻辑
+
+视频被认为已处理的条件（满足任一即可）:
+1. 输出目录存在: `{output_dir}/{video_parent_folder}/`
+2. 处理完成标记存在: `processed_complete.txt`
+3. 已有输出图片文件
+
+#### 3.4.4 关键方法
+
+```python
+def scan_videos(self):
+    """扫描文件夹中的视频文件"""
+    
+def is_video_processed(self, video_path):
+    """判断视频是否已处理"""
+    
+def run(self):
+    """自动处理循环"""
+    
+def stop(self):
+    """停止自动处理"""
+```
+
+### 3.5 积水识别监控器 (WaterDetectionMonitor)
+
+**文件位置**: `inference2.py`  
+**类名**: `WaterDetectionMonitor(FileSystemEventHandler)`
+
+对检测结果图片进行积水区域识别和标记。
+
+#### 3.5.1 功能特点
+
+- 使用YOLO分割模型识别积水区域
+- 自动监控新生成的检测图片
+- 计算积水面积占比
+- 生成可视化结果图片（标注积水区域）
+- 保存识别结果到CSV
+
+#### 3.5.2 处理流程
+
+1. **模型加载**: 加载积水分割模型 (`WATER_SEGMENT_WEIGHTS`)
+2. **文件监控**: 
+   - 使用Watchdog监控文件系统事件
+   - 周期性扫描新文件（默认5秒间隔）
+3. **图片处理**:
+   - 读取图片
+   - YOLO模型预测 (`model(image, conf=0.6)`)
+   - 提取掩码和边界框
+   - 计算积水面积占比
+   - 过滤小面积积水（面积占比 < 5% 认为无积水）
+4. **结果保存**:
+   - 可视化图片: `{subfolder}/积水识别结果/{image_name}_积水识别.png`
+   - CSV记录: `{subfolder}/{subfolder.name}_积水识别结果.csv`
+
+#### 3.5.3 CSV结果格式
+
+| 字段名 | 说明 |
+|--------|------|
+| 原图片名称 | 原始检测图片文件名 |
+| 原图片路径 | 原始图片完整路径 |
+| 识别后图片名称 | 标注后的图片文件名 |
+| 识别后图片路径 | 标注图片完整路径 |
+| 是否有积水 | '是' 或 '否' |
+| 积水区域数量 | 检测到的积水区域数量 |
+| 平均置信度 | 所有检测区域的平均置信度 |
+| 积水面积占比(%) | 积水区域占图片总面积百分比 |
+| 处理时间 | 处理时间戳 |
+
+### 3.6 数据库自动更新器 (DatabaseAutoUpdater)
+
+**文件位置**: `database_auto_updater.py`  
+**类名**: `DatabaseAutoUpdater`
+
+定期检查新数据并自动同步到MySQL数据库。
+
+#### 3.6.1 功能特点
+
+- 后台线程定期扫描（默认30秒间隔）
+- 读取列车信息文件（TXT格式）
+- 关联检测图片和积水识别结果
+- 自动插入或更新数据库记录
+- 仅处理最近一周内的数据
+
+#### 3.6.2 数据来源
+
+- 列车信息目录: `F:\baowen` (默认)
+  - 文件格式: `{train_name}.txt`
+  - CSV格式: 序号, 型号, 车号, 时间, 备注
+- 输出图片目录: `runs/output_images`
+- 积水识别结果: CSV文件
+
+#### 3.6.3 数据库表结构
+
+**trains表** (列车信息):
+- id: 主键
+- train_name: 列车名称（唯一）
+- total_carriages: 总车厢数
+- accuracy_rate: 准确率
+- correct_count: 识别正确数
+- participated_count: 参与统计数
+- created_at, updated_at: 时间戳
+
+**carriages表** (车厢信息):
+- id: 主键
+- train_id: 外键，关联trains表
+- carriage_id: 车厢序号
+- full_carriage_number: 完整车号
+- recognized_plate: 识别到的车牌号
+- recognition_time: 识别时间
+- is_special: 是否为特殊车号（P或N开头）
+- water_info: 积水信息（'有水'/'无水'）
+- water_area_ratio: 积水面积占比
+- top_image_path: 顶部图片路径
+- side_image_path: 侧面图片路径
+- created_at, updated_at: 时间戳
+
+#### 3.6.4 关键方法
+
+```python
+def start_monitoring(self):
+    """启动监控线程"""
+    
+def stop_monitoring(self):
+    """停止监控线程"""
+    
+def _check_and_update_data(self):
+    """检查并更新数据"""
+    
+def _process_train_file(self, train_name, txt_file):
+    """处理单个列车文件"""
+```
+
+### 3.7 MySQL数据库操作模块 (test_mysql.py)
+
+提供数据库连接、查询和更新功能。
+
+#### 3.7.1 配置管理
+
+数据库配置从YAML文件加载: `config/settings.yaml`
+
+```yaml
+database:
+  host: localhost
+  port: 3306
+  username: root
+  password: 123456
+  database_name: world
+  charset: utf8mb4
+```
+
+#### 3.7.2 主要功能函数
+
+```python
+def load_database_config():
+    """加载数据库配置"""
+    
+def create_database_tables():
+    """创建数据库表结构"""
+    
+def insert_train_data(train_name, total_carriages, accuracy_rate, ...):
+    """插入或更新列车数据"""
+    
+def insert_carriage_data(train_name, carriage_data):
+    """插入或更新车厢数据"""
+    
+def query_recent_water_carriages(days=7, limit=100):
+    """查询最近有积水的车厢"""
+    
+def review_mark_no_water(items):
+    """批量标记为无水"""
+    
+def review_confirm_water(items):
+    """批量确认有水"""
+    
+def find_image_for_carriage_with_csv_cached(...):
+    """查找车厢对应图片和积水信息"""
+    
+def find_side_image_by_plate_number_cached(...):
+    """查找侧面图片和车牌识别结果"""
+```
+
+### 3.8 列车信息查看器 (TrainImageViewer)
+
+**文件位置**: `guanggang_main.py`  
+**类名**: `TrainImageViewer(QMainWindow)`
+
+查看单列车的详细信息，包括各车厢的检测结果和图片。
+
+#### 3.8.1 功能特点
+
+- 列车列表选择
+- 车厢信息表格展示
+- 顶部和侧面图片显示
+- 积水状态标注
+- 准确率计算和显示
+- 数据缓存机制（减少重复读取）
+- 支持筛选和排序
+
+#### 3.8.2 数据缓存 (TrainDataCache)
+
+为提升性能，实现了多级缓存机制:
+
+1. **CSV文件缓存**: 缓存已读取的CSV文件内容
+2. **列车数据缓存**: 缓存列车详细信息
+3. **索引缓存**: 使用字典索引加速查找
+
+```python
+class TrainDataCache:
+    """数据缓存管理类"""
+    
+    def get_train_data(self, train_name, file_path, loader_func):
+        """获取列车数据（带缓存）"""
+    
+    def invalidate_cache(self):
+        """清除所有缓存"""
+    
+    def invalidate_train_cache(self, train_name):
+        """清除指定列车的缓存"""
+```
+
+#### 3.8.3 准确率计算
+
+准确率 = (识别正确数 / 总车厢数) × 100%
+
+- 识别正确: `water_info == '无水'` 的车厢
+- 总车厢数: 所有普通车号车厢（排除P、N开头的特殊车号）
+
+### 3.9 积水车厢查看器 (WaterCarriageViewer)
+
+**文件位置**: `guanggang_main.py`  
+**类名**: `WaterCarriageViewer(QDialog)`
+
+查看和管理被识别为有积水的车厢。
+
+#### 3.9.1 功能特点
+
+- 按时间范围筛选（最近N天）
+- 列表展示积水车厢信息
+- 顶部和侧面图片预览
+- 批量审核功能:
+  - 标记为"无积水"
+  - 确认为"有积水"
+- 审核结果同步到数据库和CSV文件
+- 自动刷新缓存
+
+#### 3.9.2 审核逻辑
+
+1. **标记为无积水**:
+   - `water_info = '无水'`
+   - `water_area_ratio = 0.0`
+   - `top_image_path = original_path` (原始图片)
+
+2. **确认为有水**:
+   - `water_info = '有水'`
+   - `water_area_ratio = CSV中的占比值 × 1.3`
+   - `top_image_path = water_detected_path` (标注图片)
+
+### 3.10 结果查看对话框 (ResultViewerDialog)
+
+**文件位置**: `guanggang_main.py`  
+**类名**: `ResultViewerDialog(QDialog)`
+
+浏览和管理检测结果图片。
+
+#### 3.10.1 功能特点
+
+- 图片列表显示（按帧号排序）
+- 图片预览和放大显示
+- 筛选功能（按文件名、时间等）
+- 删除功能（单个或批量）
+- 右键菜单快捷操作
+
+### 3.11 延迟加载机制 (LazyLoader)
+
+**文件位置**: `guanggang_main.py`  
+**类名**: `LazyLoader(types.ModuleType)`
+
+为了加快程序启动速度，对重量级模块实现延迟加载。
+
+```python
+# 延迟加载的模块
+cv2 = LazyLoader("cv2", globals(), "cv2")
+np = LazyLoader("np", globals(), "numpy")
+pd = LazyLoader("pd", globals(), "pandas")
+plt = LazyLoader("plt", globals(), "matplotlib.pyplot")
+```
+
+模块在首次使用时才真正导入，减少启动时的内存占用和加载时间。
+
+## 四、数据处理流程
+
+### 4.1 主系统处理流程
+
+```
+视频文件 (36*.mp4)
+    ↓
+AutoProcessor 扫描发现
+    ↓
+VideoThread 处理
+    ├── YOLO检测和跟踪
+    ├── 计数逻辑
+    ├── 裁剪目标区域
+    └── 保存图片到 runs/output_images/{train_name}/frame_X.jpg
+    ↓
+生成 processed_complete.txt 标记
+    ↓
+WaterDetectionMonitor 监控新图片
+    ↓
+积水识别处理
+    ├── YOLO分割模型识别
+    ├── 计算积水面积占比
+    └── 保存结果到 CSV
+    ↓
+DatabaseAutoUpdater 同步到数据库
+```
+
+### 4.2 侧面系统处理流程
+
+```
+视频文件 (33*.mp4/avi)
+    ↓
+CemianVideoThread 处理
+    ├── YOLO检测
+    ├── 多方向计数
+    ├── 车牌识别
+    └── 保存结果
+    ↓
+输出到 output_images/{train_name}/
+    ├── 检测图片
+    └── plate_results.csv
+    ↓
+DatabaseAutoUpdater 关联侧面图片
+```
+
+### 4.3 数据关联流程
+
+```
+列车信息文件 (F:\baowen\{train_name}.txt)
+    ↓
+DatabaseAutoUpdater 读取
+    ↓
+查找对应图片:
+    ├── 顶部图片: find_image_for_carriage_with_csv_cached()
+    │   └── runs/output_images/{train_name}/frame_X.jpg
+    │   └── 积水识别结果 CSV
+    └── 侧面图片: find_side_image_by_plate_number_cached()
+        └── output_images/{train_name}/plate_results.csv
+    ↓
+插入/更新数据库
+    ├── trains 表
+    └── carriages 表
+```
+
+## 五、数据库设计
+
+### 5.1 表结构
+
+#### 5.1.1 trains 表
+
+| 字段名 | 类型 | 说明 | 约束 |
+|--------|------|------|------|
+| id | INT | 主键 | AUTO_INCREMENT |
+| train_name | VARCHAR(50) | 列车名称 | UNIQUE, NOT NULL |
+| total_carriages | INT | 总车厢数 | DEFAULT 0 |
+| accuracy_rate | DECIMAL(5,2) | 准确率(%) | DEFAULT 0.00 |
+| correct_count | INT | 识别正确数 | DEFAULT 0 |
+| participated_count | INT | 参与统计数 | DEFAULT 0 |
+| created_at | TIMESTAMP | 创建时间 | DEFAULT CURRENT_TIMESTAMP |
+| updated_at | TIMESTAMP | 更新时间 | ON UPDATE CURRENT_TIMESTAMP |
+
+#### 5.1.2 carriages 表
+
+| 字段名 | 类型 | 说明 | 约束 |
+|--------|------|------|------|
+| id | INT | 主键 | AUTO_INCREMENT |
+| train_id | INT | 列车ID | FOREIGN KEY → trains.id |
+| carriage_id | VARCHAR(10) | 车厢序号 | NOT NULL |
+| full_carriage_number | VARCHAR(50) | 完整车号 | NOT NULL |
+| recognized_plate | VARCHAR(50) | 识别车牌号 | DEFAULT '' |
+| recognition_time | VARCHAR(50) | 识别时间 | DEFAULT '' |
+| is_special | BOOLEAN | 是否特殊车号 | DEFAULT FALSE |
+| water_info | VARCHAR(20) | 积水信息 | DEFAULT '无水' |
+| water_area_ratio | DECIMAL(5,2) | 积水面积占比 | DEFAULT 0.00 |
+| top_image_path | TEXT | 顶部图片路径 | |
+| side_image_path | TEXT | 侧面图片路径 | |
+| created_at | TIMESTAMP | 创建时间 | DEFAULT CURRENT_TIMESTAMP |
+| updated_at | TIMESTAMP | 更新时间 | ON UPDATE CURRENT_TIMESTAMP |
+
+### 5.2 索引
+
+- `idx_train_id`: carriages表的train_id字段索引
+- `idx_train_name`: trains表的train_name字段索引
+
+### 5.3 数据同步策略
+
+- **插入策略**: 首次插入，后续根据train_name和carriage_id判断更新
+- **更新策略**: 仅当数据发生变化时才更新
+- **时间范围**: 仅处理最近一周内的数据，避免重复处理历史数据
+
+## 六、配置文件说明
+
+### 6.1 数据库配置文件 (config/settings.yaml)
+
+```yaml
+database:
+  host: localhost          # 数据库主机地址
+  port: 3306              # 端口号
+  username: root          # 用户名
+  password: 123456        # 密码
+  database_name: world    # 数据库名
+  charset: utf8mb4        # 字符集
+```
+
+### 6.2 路径配置
+
+所有路径配置在 `guanggang_main.py` 文件顶部，使用绝对路径。如需修改，请编辑相应常量。
+
+## 七、部署和运行
+
+### 7.1 环境要求
+
+- **操作系统**: Windows 10/11 (主要支持)
+- **Python版本**: Python 3.8+
+- **硬件要求**:
+  - CPU: 推荐多核处理器
+  - 内存: 至少8GB RAM（推荐16GB+）
+  - 显存: 如果有GPU加速，推荐4GB+显存
+  - 存储: 根据视频数量预留足够空间
+
+### 7.2 依赖安装
+
+```bash
+# 核心GUI框架
+pip install PySide6
+
+# 深度学习框架
+pip install ultralytics
+pip install torch torchvision torchaudio  # PyTorch（ultralytics的依赖）
+
+# 图像处理
+pip install opencv-python
+pip install numpy
+pip install Pillow
+
+# 数据处理
+pip install pandas
+
+# 数据库
+pip install pymysql
+pip install PyYAML
+
+# 文件监控
+pip install watchdog
+
+# 可视化（可选）
+pip install matplotlib
+pip install seaborn
+
+# 其他工具
+pip install tqdm
+```
+
+### 7.3 模型权重准备
+
+确保以下模型权重文件存在于指定路径:
+
+1. `runs/segment/train2/weights/best.pt` - 主系统检测模型
+2. `runs/segment/train/weights_jishui/best4.pt` - 积水识别模型
+3. `runs/detect/train5/weights/best.pt` - 检测模型
+4. `runs/detect/train2/weights/best3_0816.pt` - 车牌识别模型
+
+### 7.4 数据库初始化
+
+1. 创建MySQL数据库
+2. 配置 `config/settings.yaml`
+3. 运行数据库初始化:
+
+```python
+from test_mysql import create_database_tables
+create_database_tables()
+```
+
+### 7.5 运行程序
+
+```bash
+python guanggang_main.py
+```
+
+### 7.6 打包为可执行文件
+
+使用PyInstaller打包:
+
+```bash
+pyinstaller WaterloggingApp.spec
+```
+
+打包后的可执行文件位于 `dist/WaterloggingApp.exe`
+
+## 八、使用指南
+
+### 8.1 主系统操作
+
+#### 8.1.1 手动处理视频
+
+1. 点击"选择模型"按钮，选择检测模型权重文件
+2. 点击"选择输出目录"，设置结果保存路径
+3. 点击"选择视频"，选择要处理的视频文件
+4. 设置置信度阈值（默认0.25）
+5. 点击"开始处理"按钮
+6. 处理过程中可实时查看:
+   - 视频画面和检测结果
+   - 当前计数
+   - 处理FPS
+7. 点击"停止处理"可中断处理
+
+#### 8.1.2 自动处理模式
+
+1. 点击"📁 选择自动处理文件夹"，选择视频文件夹
+2. 点击"▶️ 开始自动处理d"启动自动处理
+3. 系统会自动:
+   - 扫描文件夹中的36*.mp4文件
+   - 识别未处理的视频
+   - 逐个处理并保存结果
+4. 处理状态会在UI上实时显示
+5. 点击"⏹️ 停止自动处理"停止
+
+### 8.2 侧面检测系统操作
+
+1. 在"🎯 侧面检测系统"区域:
+   - 选择检测模型和车牌识别模型
+   - 设置输出目录
+   - 设置置信度阈值
+2. 点击"🚀 开启自动处理c"启动自动处理
+3. 系统会自动处理33*.mp4/avi文件
+4. 实时显示:
+   - 检测画面
+   - 各方向计数
+   - 各检测线计数
+   - 车牌识别结果
+5. 点击"⏹️ 停止自动处理"停止
+
+### 8.3 积水识别操作
+
+1. 点击主界面"🌊 积水识别系统"按钮
+2. 选择模式:
+   - **监控模式**: 自动监控新图片并识别
+   - **批量处理模式**: 一次性处理所有现有图片
+3. 系统自动进行积水识别并保存结果
+
+### 8.4 查看检测结果
+
+#### 8.4.1 列车信息查看
+
+1. 点击"🚆 列车信息查看"按钮
+2. 在列车列表中选择要查看的列车
+3. 查看:
+   - 各车厢详细信息表格
+   - 顶部图片和侧面图片
+   - 积水状态和准确率
+4. 支持筛选、排序和刷新
+
+#### 8.4.2 积水车厢查看
+
+1. 点击"💧 积水车厢查看"按钮
+2. 选择时间范围（最近N天）
+3. 查看积水车厢列表
+4. 选中车厢可查看图片预览
+5. 批量审核:
+   - 选择多个车厢
+   - 点击"批量标记无积水"或"批量确认积水"
+   - 审核结果自动同步到数据库
+
+### 8.5 结果文件浏览
+
+1. 点击"浏览结果"或"浏览视频结果"按钮
+2. 在结果查看对话框中:
+   - 查看图片列表（按帧号排序）
+   - 点击图片查看大图
+   - 使用筛选功能查找特定图片
+   - 右键菜单删除图片
+
+## 九、性能优化
+
+### 9.1 已实现的优化
+
+1. **延迟加载**: 重量级模块（cv2, numpy等）延迟导入
+2. **多线程处理**: 视频处理在独立线程中进行，不阻塞UI
+3. **数据缓存**: CSV文件和列车数据缓存，减少重复读取
+4. **智能扫描**: 仅处理最近一周内的新视频
+5. **处理标记**: 使用标记文件避免重复处理
+6. **批量操作**: 支持批量审核和批量处理
+
+### 9.2 性能建议
+
+1. **硬件加速**: 如有GPU，确保CUDA已正确配置
+2. **存储优化**: 
+   - 使用SSD存储视频和结果文件
+   - 定期清理历史数据
+3. **并发处理**: 
+   - 可考虑多进程处理多个视频（需修改代码）
+   - 调整扫描间隔避免过于频繁
+4. **内存管理**: 
+   - 处理大视频时注意内存占用
+   - 定期重启程序释放内存
+
+## 十、常见问题与解决方案
+
+### 10.1 模型加载失败
+
+**问题**: 启动时报"加载模型失败"
+
+**解决方案**:
+1. 检查模型权重文件路径是否正确
+2. 确认模型文件存在且完整
+3. 检查ultralytics版本是否兼容
+4. 查看终端错误信息定位具体问题
+
+### 10.2 数据库连接失败
+
+**问题**: 无法连接到MySQL数据库
+
+**解决方案**:
+1. 检查 `config/settings.yaml` 配置是否正确
+2. 确认MySQL服务是否运行
+3. 检查网络连接和防火墙设置
+4. 确认数据库用户权限
+
+### 10.3 视频处理卡顿
+
+**问题**: 视频处理过程中UI卡顿或无响应
+
+**解决方案**:
+1. 确认视频处理在独立线程中运行（检查代码）
+2. 降低视频分辨率或帧率
+3. 调整置信度阈值减少检测数量
+4. 检查系统资源占用（CPU、内存、显存）
+
+### 10.4 路径错误
+
+**问题**: 文件保存失败或找不到文件
+
+**解决方案**:
+1. 检查代码中的绝对路径是否正确
+2. 确认目标目录有写入权限
+3. 使用相对路径或环境变量（推荐重构）
+4. 检查磁盘空间是否充足
+
+### 10.5 内存不足
+
+**问题**: 处理大视频时内存溢出
+
+**解决方案**:
+1. 增加系统内存
+2. 分批处理视频
+3. 降低视频分辨率
+4. 优化代码，及时释放不用的对象
+
+### 10.6 重复处理视频
+
+**问题**: 自动处理重复处理已处理的视频
+
+**解决方案**:
+1. 检查 `processed_complete.txt` 标记文件是否正确生成
+2. 确认输出目录结构正确
+3. 检查视频文件修改时间
+4. 手动删除已处理标记后重新处理
+
+## 十一、扩展开发建议
+
+### 11.1 代码优化建议
+
+1. **路径配置**: 将硬编码路径改为配置文件或环境变量
+2. **日志系统**: 使用logging模块替代print，统一日志管理
+3. **错误处理**: 完善异常处理和错误提示
+4. **代码重构**: 拆分大文件，提高代码可维护性
+5. **单元测试**: 为核心功能添加单元测试
+
+### 11.2 功能扩展建议
+
+1. **多视频并发处理**: 支持同时处理多个视频
+2. **Web界面**: 开发Web管理界面，支持远程访问
+3. **报警功能**: 检测到积水时发送邮件或短信通知
+4. **统计分析**: 增加更详细的数据统计和可视化
+5. **模型管理**: 支持模型版本管理和切换
+6. **数据导出**: 支持导出Excel、PDF等格式报告
+
+
+
+## 十二、版本历史
+
+### v5.0 (当前版本)
+
+- 主系统和侧面检测系统完整实现
+- 积水识别功能集成
+- 数据库自动同步
+- 完善的UI界面和功能模块
+- 数据缓存优化
+- 批量审核功能
+
+## 十三、技术支持
+
+### 13.1 开发环境
+
+- **IDE**: 推荐使用PyCharm或VS Code
+- **Python版本管理**: 推荐使用conda或venv
+- **版本控制**: Git
+
+### 13.2 调试建议
+
+1. 使用IDE的调试功能
+2. 添加详细日志输出
+3. 使用断点调试关键流程
+4. 检查信号和槽连接是否正确
+
+
